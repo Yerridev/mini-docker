@@ -7,9 +7,9 @@ Proyecto académico — Taller de Programación en Go, nivel medio-avanzado.
 
 | Hito | Estado | Descripción |
 |---|---|---|
-| **Hito 1** | ✅ Código completo, falta verificar en Linux | Aislamiento de namespaces (UTS, PID, MNT) |
+| **Hito 1** | ✅ Verificado en Linux (Ubuntu 24.04 WSL2) | Aislamiento de namespaces (UTS, PID, MNT) |
 | **Hito 2** | ❌ No iniciado | Rootfs propio con chroot/pivot_root |
-| **Hito 3** | ❌ No iniciado | cgroups (memoria y CPU) |
+| **Hito 3** | ✅ Verificado en Linux (Ubuntu 24.04 WSL2) | cgroups v2 (memoria y CPU) |
 | **Hito 4** | ❌ No iniciado | CLI pulido, env vars, volúmenes, limpieza |
 | **Hito 5** | ❌ No iniciado | Aislamiento de red (veth pair) |
 
@@ -47,7 +47,35 @@ sudo ./minidocker run /bin/sh
 
 # Con rootfs personalizado (Hito 2+)
 sudo ./minidocker --rootfs ./alpine-rootfs run /bin/sh
+
+# Con límites de recursos (Hito 3 — cgroups v2)
+sudo ./minidocker --memory 100m run /bin/sh          # 100 MB de RAM
+sudo ./minidocker --cpu 0.5 run /bin/sh              # medio núcleo
+sudo ./minidocker --memory 64m --cpu 0.2 run /bin/sh # ambos
 ```
+
+`--memory` acepta `100m`, `512k`, `1g` o bytes crudos. `--cpu` toma núcleos (`0.5`).
+
+### Verificación del Hito 3 (Ubuntu 24.04 WSL2, cgroups v2)
+
+```text
+$ sudo ./minidocker --memory 100m --cpu 0.5 run /bin/sh -c 'cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.max'
+104857600                       # límite aplicado y visible desde dentro
+
+$ sudo ./minidocker --memory 64m run /bin/sh -c 'tail /dev/zero'
+# kernel: "Memory cgroup out of memory: Killed process (tail)"  → OOM kill
+
+# Límite de CPU real (bucle de 60M iteraciones):
+#   sin límite:    2276 ms
+#   con --cpu 0.2: 18597 ms     → ~8x más lento
+```
+
+Tras salir no quedan cgroups colgados en `/sys/fs/cgroup/minidocker/`.
+
+> **Nota de portabilidad:** el contenedor hace `mount --make-rprivate /` antes de
+> montar `/proc`. Sin esto, en hosts con systemd (`/` = `MS_SHARED`) el montaje se
+> propaga al host y corrompe su `/proc`. Se ejecuta desde un shell de login (que
+> systemd coloca en una hoja de cgroup con los controladores ya delegados).
 
 ## Arquitectura del proyecto
 

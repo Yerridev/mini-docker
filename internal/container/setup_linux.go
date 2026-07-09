@@ -26,8 +26,16 @@ func setupContainer(cfg *config.Config) error {
 		return err
 	}
 
-	// FASE 3 — MNT + PID: montar /proc propio
-	// Dentro del nuevo MNT namespace, este mount NO afecta al host.
+	// FASE 2 — MNT: hacer privado (recursivo) el árbol de montaje.
+	// En hosts con systemd `/` suele ser MS_SHARED; sin esto, el mount de /proc
+	// del contenedor se PROPAGA de vuelta al host y corrompe su /proc (rompe
+	// /proc/self/exe en ejecuciones posteriores). Debe ir antes de mountProc.
+	if err := syscall.Mount("", "/", "", syscall.MS_REC|syscall.MS_PRIVATE, ""); err != nil {
+		return fmt.Errorf("make-rprivate /: %w", err)
+	}
+
+	// FASE 3 — MNT + PID: montar /proc propio.
+	// Ya en un MNT namespace privado, este mount NO afecta al host.
 	if err := mountProc(); err != nil {
 		return err
 	}
