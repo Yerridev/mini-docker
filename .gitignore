@@ -1,3 +1,7 @@
 minidocker.exe
 minidocker.linux
 *.exe
+
+# rootfs extraído de Alpine (Hito 2) — nunca commitear
+rootfs/*
+!rootfs/.gitkeep

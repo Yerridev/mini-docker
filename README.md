@@ -7,8 +7,8 @@ Proyecto académico — Taller de Programación en Go, nivel medio-avanzado.
 
 | Hito | Estado | Descripción |
 |---|---|---|
-| **Hito 1** | ✅ Código completo, falta verificar en Linux | Aislamiento de namespaces (UTS, PID, MNT) |
-| **Hito 2** | ❌ No iniciado | Rootfs propio con chroot/pivot_root |
+| **Hito 1** | ✅ Completo, verificado en WSL2 | Aislamiento de namespaces (UTS, PID, MNT) |
+| **Hito 2** | ✅ Completo, verificado en WSL2 | Rootfs propio con pivot_root (fallback chroot) |
 | **Hito 3** | ❌ No iniciado | cgroups (memoria y CPU) |
 | **Hito 4** | ❌ No iniciado | CLI pulido, env vars, volúmenes, limpieza |
 | **Hito 5** | ❌ No iniciado | Aislamiento de red (veth pair) |
@@ -42,11 +42,17 @@ GOOS=linux GOARCH=amd64 go build -o minidocker ./cmd/minidocker
 ## Uso rápido (en Linux)
 
 ```bash
-# Ejecutar un comando aislado
-sudo ./minidocker run /bin/sh
+# 1. Preparar el rootfs de Alpine (Hito 2) — una sola vez
+./scripts/setup-rootfs.sh ./rootfs
+# En WSL usar un directorio nativo de Linux (los symlinks del tarball
+# no sobreviven en /mnt/c ni /mnt/d):
+./scripts/setup-rootfs.sh /tmp/rootfs
 
-# Con rootfs personalizado (Hito 2+)
-sudo ./minidocker --rootfs ./alpine-rootfs run /bin/sh
+# 2. Ejecutar un comando aislado con rootfs propio
+sudo ./minidocker --rootfs ./rootfs run /bin/sh
+
+# Sin rootfs válido cae en "modo Hito 1" (solo namespaces, avisa por stderr)
+sudo ./minidocker run /bin/sh
 ```
 
 ## Arquitectura del proyecto
@@ -62,14 +68,16 @@ mini-docker/
 │   │   ├── exec.go          ← ExecInit(): orquesta setup + ejecución
 │   │   ├── exec_linux.go    ← syscall.Exec() para Linux
 │   │   ├── exec_other.go    ← stub para Windows/macOS
-│   │   ├── setup_linux.go   ← sethostname(), mountProc() — setup del container
+│   │   ├── setup_linux.go   ← ✅ Hito 2: pivot_root/chroot + /proc + hostname
 │   │   └── setup_other.go   ← stub para Windows/macOS
 │   ├── namespace/
 │   │   ├── namespace_linux.go  ← SysProcAttr con CLONE_NEWUTS|NEWPID|NEWMNT
 │   │   └── namespace_other.go  ← stub para compilar en Windows/macOS
 │   ├── cgroup/              ← 🔲 Hito 3 — control de recursos
 │   └── network/             ← 🔲 Hito 5 — aislamiento de red
-├── rootfs/                  ← Extraer Alpine aquí para Hito 2
+├── rootfs/                  ← Extraer Alpine aquí para Hito 2 (gitignoreado)
+├── scripts/
+│   └── setup-rootfs.sh      ← ✅ Hito 2 — descarga/extrae Alpine minirootfs
 ├── go.mod
 └── README.md
 ```
@@ -81,7 +89,7 @@ minidocker run /bin/sh
   │
   ├─ main.go: detecta que NO es "init", entra a runContainer()
   │
-  ├─ container.go: exec.Command("/proc/self/exe", "init", "/bin/sh")
+  ├─ container.go: exec.Command("/proc/self/exe", "--rootfs", X, "init", "/bin/sh")
   │   └─ SysProcAttr con CLONE_NEWUTS | CLONE_NEWPID | CLONE_NEWMNT
   │   └─ env MINIDOCKER_INIT=1
   │
@@ -90,9 +98,10 @@ minidocker run /bin/sh
   ├─ [HIJO] main.go: detecta MINIDOCKER_INIT=1, entra a initContainer()
   │
   ├─ exec.go → setupContainer():
-  │   ├─ sethostname("minidocker")           ← UTS
-  │   ├─ mount("proc", "/proc", "proc")      ← MNT + PID
-  │   └─ chroot/pivot_root (Hito 2)
+  │   ├─ sethostname("minidocker")             ← UTS
+  │   ├─ mount / privado (MS_REC|MS_PRIVATE)   ← sin fugas de montajes al host
+  │   ├─ pivot_root(rootfs) — fallback chroot  ← HITO 2: raíz propia
+  │   └─ mount("proc", "/proc", "proc")        ← MNT + PID, DESPUÉS del pivot
   │
   ├─ execContainer(): syscall.Exec("/bin/sh")
   │   └─ reemplaza el proceso Go por /bin/sh — es PID 1
@@ -102,25 +111,30 @@ minidocker run /bin/sh
 
 ## Hitos pendientes — asignación por integrante
 
-### Integrante A — Hito 2: Rootfs propio
+### Integrante A — Hito 2: Rootfs propio ✅ COMPLETADO
+
+> **Estado:** implementado en `internal/container/setup_linux.go` y
+> `scripts/setup-rootfs.sh`; verificado en WSL2 (ver "Verificación del
+> Hito 2" más abajo). Se usa **pivot_root** (nivel sobresaliente) con
+> fallback automático a chroot.
 
 **Archivos a modificar:**
 - `internal/container/setup_linux.go`
 
 **Tareas:**
 
-1. **Script de extracción de Alpine:**
-   - Descargar Alpine minirootfs desde `https://dl-cdn.alpinelinux.org/alpine/edge/releases/x86_64/alpine-minirootfs-3.21.0-x86_64.tar.gz`
+1. **Script de extracción de Alpine:** ✅ `scripts/setup-rootfs.sh`
+   - Descargar Alpine minirootfs desde `https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-minirootfs-3.21.0-x86_64.tar.gz` (la ruta correcta es `v3.21/releases`, no `edge/releases`)
    - Extraer a `rootfs/` con `tar -xzf`
    - El directorio debe contener `/bin`, `/etc`, `/lib`, `/usr`, etc.
 
-2. **Implementar `chrootRootfs(path string)`:**
+2. **Implementar `chrootRootfs(path string)`:** ✅
    - Guardar el root actual con `os.Getwd()` ANTES de chroot (para poder volver si es necesario)
    - `syscall.Chroot(path)`
    - `os.Chdir("/")`
    - Manejar error: `fmt.Errorf("chroot %s: %w", path, err)`
 
-3. **Implementar `pivotRootfs(path string)` (opcional — nivel sobresaliente):**
+3. **Implementar `pivotRootfs(path string)` (opcional — nivel sobresaliente):** ✅
    - Bind-mount rootfs sobre sí mismo: `syscall.Mount(path, path, "", syscall.MS_BIND|syscall.MS_REC, "")`
    - Crear directorio `.oldroot` dentro del rootfs
    - `syscall.PivotRoot(path, path+"/.oldroot")`
@@ -128,11 +142,11 @@ minidocker run /bin/sh
    - Unmount `.oldroot`: `syscall.Unmount("/.oldroot", syscall.MNT_DETACH)`
    - Eliminar `.oldroot`
 
-4. **Montar `/proc` DESPUÉS del chroot:**
+4. **Montar `/proc` DESPUÉS del chroot:** ✅
    - Mover la llamada a `mountProc()` para que ocurra después de chroot/pivot_root
    - Verificar que `ps` funcione correctamente dentro del container
 
-5. **Verificación:**
+5. **Verificación:** ✅
    - Dentro del container: `ls /` debe mostrar solo archivos de Alpine
    - `ps aux` debe funcionar
    - El proceso NO debe poder ver archivos del host
@@ -140,6 +154,39 @@ minidocker run /bin/sh
 **Criterios de éxito:**
 - `sudo ./minidocker --rootfs ./rootfs run /bin/sh -c "ls /"` muestra sistema Alpine
 - No hay fugas de montajes (`mount | grep rootfs` después de salir)
+
+#### Verificación del Hito 2 (ejecutada el 2026-07-09, WSL2 kernel 6.6.87)
+
+```bash
+./scripts/setup-rootfs.sh /tmp/rootfs
+sudo ./minidocker --rootfs /tmp/rootfs run /bin/sh -c "ls /"
+# → bin dev etc home lib media mnt opt proc root run sbin srv sys tmp usr var
+
+sudo ./minidocker --rootfs /tmp/rootfs run /bin/sh -c "cat /etc/os-release"
+# → NAME="Alpine Linux" VERSION_ID=3.21.0  (el host NO es Alpine 3.21)
+
+sudo ./minidocker --rootfs /tmp/rootfs run /bin/sh -c "ps aux"
+# → PID 1 = /bin/sh; solo se ven los procesos del container
+
+sudo ./minidocker --rootfs /tmp/rootfs run /bin/sh -c "ls /.oldroot"
+# → No such file or directory  (el root viejo del host fue desmontado)
+
+mount | grep /tmp/rootfs   # después de salir
+# → (vacío: sin fugas de montajes)
+```
+
+**Detalles de implementación:**
+- `pivot_root(2)` en lugar de `chroot(2)`: desmonta el root del host por
+  completo (sin vías de escape). Si `pivot_root` falla (p. ej. en
+  filesystems de red), cae automáticamente a `chroot` con un aviso.
+- Antes del pivot se remonta `/` como `MS_REC|MS_PRIVATE`: en hosts con
+  propagación *shared* (systemd) esto evita que los montajes del
+  container se fuguen al host.
+- Bugfix del Hito 1: el proceso padre ahora **reenvía `--rootfs` al
+  proceso init** (antes el hijo siempre usaba el valor por defecto) y la
+  ruta se normaliza a absoluta.
+- Si el rootfs no existe o no contiene `bin/`, se ejecuta en "modo
+  Hito 1" (solo namespaces) con un aviso por stderr.
 
 ---
 

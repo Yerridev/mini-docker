@@ -6,6 +6,7 @@ import (
 	"minidocker/internal/config"
 	"minidocker/internal/container"
 	"os"
+	"path/filepath"
 )
 
 const (
@@ -29,15 +30,18 @@ func isInit() bool {
 }
 
 func initContainer(rootfs string) {
-	if len(os.Args) < 3 {
+	// argv: [minidocker-init --rootfs <path>] init <command> [args...]
+	// flag.Parse ya consumió --rootfs; flag.Args() = ["init", command, ...]
+	args := flag.Args()
+	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: minidocker run <command> [args...]")
 		os.Exit(1)
 	}
 
 	cfg := &config.Config{
 		Rootfs:  rootfs,
-		Command: os.Args[2],
-		Args:    os.Args[3:],
+		Command: args[1],
+		Args:    args[2:],
 	}
 
 	if err := container.ExecInit(cfg); err != nil {
@@ -63,8 +67,20 @@ func runContainer(rootfs string) {
 		os.Exit(1)
 	}
 
+	// Ruta absoluta: el proceso init debe resolver el mismo rootfs
+	// sin depender del directorio de trabajo.
+	absRootfs := rootfs
+	if rootfs != "" {
+		abs, err := filepath.Abs(rootfs)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: rootfs %q: %v\n", rootfs, err)
+			os.Exit(1)
+		}
+		absRootfs = abs
+	}
+
 	cfg := &config.Config{
-		Rootfs:  rootfs,
+		Rootfs:  absRootfs,
 		Command: args[1],
 		Args:    args[2:],
 	}
