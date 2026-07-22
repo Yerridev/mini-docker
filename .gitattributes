@@ -1,3 +1,9 @@
 # Los scripts de shell se ejecutan en Linux/WSL: siempre LF.
 # Con CRLF, busybox sh falla con errores tipo ": not found".
 *.sh text eol=lf
+
+# Go exige LF: gofmt marca no-conformidad con CRLF y el runtime Linux
+# rechaza scripts con \r. Forzamos LF en checkout y commit.
+*.go  text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf

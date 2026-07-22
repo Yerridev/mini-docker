@@ -5,3 +5,6 @@ minidocker.linux
 # rootfs extraído de Alpine (Hito 2) — nunca commitear
 rootfs/*
 !rootfs/.gitkeep
+
+# Material del docente (guía con controles anti-autoría, Sección 2.3) — no pertenece al repo entregable
+guia minidocker.md
