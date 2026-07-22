@@ -15,8 +15,6 @@ const (
 	cgroupRoot = "/sys/fs/cgroup"
 	// Nivel intermedio que agrupa todos los contenedores de minidocker.
 	parentName = "minidocker"
-	// Período por defecto para cpu.max (100 ms), en microsegundos.
-	defaultPeriod = 100000
 )
 
 // New crea el cgroup del contenedor en /sys/fs/cgroup/minidocker/<id>.
@@ -63,10 +61,7 @@ func (m *Manager) SetCPULimit(quota, period int64) error {
 	if quota <= 0 {
 		return nil
 	}
-	if period <= 0 {
-		period = defaultPeriod
-	}
-	return m.write("cpu.max", fmt.Sprintf("%d %d", quota, period))
+	return m.write("cpu.max", FormatCPUMax(quota, period))
 }
 
 // AddProcess mueve un proceso (y todos sus hilos/hijos) al cgroup escribiendo
@@ -129,7 +124,7 @@ func delegateControllers(dir string) error {
 
 	var toAdd []string
 	for _, c := range []string{"memory", "cpu"} {
-		if contains(available, c) && !contains(enabled, c) {
+		if Contains(available, c) && !Contains(enabled, c) {
 			toAdd = append(toAdd, "+"+c)
 		}
 	}
@@ -158,13 +153,4 @@ func readTokens(path string) ([]string, error) {
 		return nil, err
 	}
 	return strings.Fields(string(data)), nil
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }
