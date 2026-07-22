@@ -99,6 +99,25 @@ func mountProc() error {
 	return nil
 }
 
+// mountVolumes monta los bind mounts host->contenedor (Hito 4). Debe ocurrir
+// ANTES del pivot_root: la ruta de origen es del host y desaparece cuando el
+// root viejo se desmonta. El destino se crea dentro del rootfs (si lo hay).
+func mountVolumes(cfg *config.Config) error {
+	for _, v := range cfg.Volumes {
+		dest := v.Target
+		if validRootfs(cfg.Rootfs) {
+			dest = filepath.Join(cfg.Rootfs, v.Target)
+		}
+		if err := os.MkdirAll(dest, 0o755); err != nil {
+			return fmt.Errorf("crear destino de volumen %s: %w", dest, err)
+		}
+		if err := syscall.Mount(v.Source, dest, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+			return fmt.Errorf("bind-mount volumen %s -> %s: %w", v.Source, dest, err)
+		}
+	}
+	return nil
+}
+
 func setupContainer(cfg *config.Config) error {
 	// FASE 1 — UTS: cambiar hostname dentro del namespace
 	if err := sethostname("minidocker"); err != nil {
@@ -107,6 +126,11 @@ func setupContainer(cfg *config.Config) error {
 
 	// FASE 2 — MNT: aislar la propagación de montajes (sin fugas al host)
 	if err := makeMountsPrivate(); err != nil {
+		return err
+	}
+
+	// HITO 4 — MNT: volúmenes (bind mounts) ANTES del cambio de raíz.
+	if err := mountVolumes(cfg); err != nil {
 		return err
 	}
 

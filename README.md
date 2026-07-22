@@ -7,10 +7,10 @@ Proyecto académico — Taller de Programación en Go, nivel medio-avanzado.
 
 | Hito | Estado | Descripción |
 |---|---|---|
-| **Hito 1** | ✅ Completo, verificado en WSL2 | Aislamiento de namespaces (UTS, PID, MNT) |
-| **Hito 2** | ✅ Completo, verificado en WSL2 | Rootfs propio con pivot_root (fallback chroot) |
-| **Hito 3** | ❌ No iniciado | cgroups (memoria y CPU) |
-| **Hito 4** | ❌ No iniciado | CLI pulido, env vars, volúmenes, limpieza |
+| **Hito 1** | ✅ Verificado en Linux (Ubuntu 24.04 WSL2) | Aislamiento de namespaces (UTS, PID, MNT) |
+| **Hito 2** | ✅ Verificado en Linux (Ubuntu 24.04 WSL2) | Rootfs propio con pivot_root (fallback chroot) |
+| **Hito 3** | ✅ Verificado en Linux (Ubuntu 24.04 WSL2) | cgroups v2 (memoria y CPU) |
+| **Hito 4** | ✅ Verificado en Linux (Ubuntu 24.04 WSL2) | CLI: env vars, volúmenes, señales, integración |
 | **Hito 5** | ❌ No iniciado | Aislamiento de red (veth pair) |
 
 ## Requisitos
@@ -49,11 +49,44 @@ GOOS=linux GOARCH=amd64 go build -o minidocker ./cmd/minidocker
 ./scripts/setup-rootfs.sh /tmp/rootfs
 
 # 2. Ejecutar un comando aislado con rootfs propio
-sudo ./minidocker --rootfs ./rootfs run /bin/sh
+sudo ./minidocker --rootfs /tmp/rootfs run /bin/sh
 
 # Sin rootfs válido cae en "modo Hito 1" (solo namespaces, avisa por stderr)
 sudo ./minidocker run /bin/sh
+
+# Con límites de recursos (Hito 3 — cgroups v2)
+sudo ./minidocker --memory 100m run /bin/sh          # 100 MB de RAM
+sudo ./minidocker --cpu 0.5 run /bin/sh              # medio núcleo
+sudo ./minidocker --memory 64m --cpu 0.2 run /bin/sh # ambos
+
+# Con entorno y volúmenes (Hito 4)
+sudo ./minidocker --env MI_VAR=hola run /bin/sh -c 'echo $MI_VAR'
+sudo ./minidocker --volume /tmp/datos:/data --rootfs /tmp/rootfs run /bin/sh -c 'ls /data'
 ```
+
+`--memory` acepta `100m`, `512k`, `1g` o bytes crudos. `--cpu` toma núcleos (`0.5`).
+`--env` y `--volume` son repetibles (como en Docker).
+
+### Verificación del Hito 3 (Ubuntu 24.04 WSL2, cgroups v2)
+
+```text
+$ sudo ./minidocker --memory 100m --cpu 0.5 run /bin/sh -c 'cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)/memory.max'
+104857600                       # límite aplicado y visible desde dentro
+
+$ sudo ./minidocker --memory 64m run /bin/sh -c 'tail /dev/zero'
+# kernel: "Memory cgroup out of memory: Killed process (tail)"  → OOM kill
+
+# Límite de CPU real (bucle de 60M iteraciones):
+#   sin límite:    2276 ms
+#   con --cpu 0.2: 18597 ms     → ~8x más lento
+```
+
+Tras salir no quedan cgroups colgados en `/sys/fs/cgroup/minidocker/`.
+
+> **Nota de portabilidad:** el contenedor hace `mount --make-rprivate /` antes de
+> montar `/proc`. Sin esto, en hosts con systemd (`/` = `MS_SHARED`) el montaje se
+> propaga al host y corrompe su `/proc`. Se ejecuta desde un shell de login (que
+> systemd coloca en una hoja de cgroup con los controladores ya delegados).
 
 ## Arquitectura del proyecto
 
