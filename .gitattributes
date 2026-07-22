@@ -1,0 +1,3 @@
+# Los scripts de shell se ejecutan en Linux/WSL: siempre LF.
+# Con CRLF, busybox sh falla con errores tipo ": not found".
+*.sh text eol=lf

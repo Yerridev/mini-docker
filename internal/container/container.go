@@ -18,7 +18,12 @@ func New(cfg *config.Config) *Container {
 }
 
 func (c *Container) Run() error {
-	initArgs := append([]string{"init", c.Config.Command}, c.Config.Args...)
+	// Reenviar --rootfs al proceso init: sin esto el hijo usaría
+	// siempre el valor por defecto (Hito 2).
+	initArgs := append(
+		[]string{"--rootfs", c.Config.Rootfs, "init", c.Config.Command},
+		c.Config.Args...,
+	)
 	cmd := exec.Command("/proc/self/exe", initArgs...)
 	cmd.Args[0] = "minidocker-init"
 
