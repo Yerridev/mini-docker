@@ -7,8 +7,6 @@ import (
 	"minidocker/internal/container"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 )
 
 const (
@@ -20,7 +18,9 @@ const (
 // stringSlice acumula el valor de un flag repetible (--env, --volume).
 type stringSlice []string
 
-func (s *stringSlice) String() string     { return strings.Join(*s, ",") }
+func (s *stringSlice) String() string {
+	return fmt.Sprintf("%v", *s)
+}
 func (s *stringSlice) Set(v string) error { *s = append(*s, v); return nil }
 
 // Flags repetibles: son globales porque tanto el padre como el proceso init
@@ -43,15 +43,15 @@ func main() {
 		return
 	}
 
-	memBytes, err := parseMemory(*memory)
+	memBytes, err := config.ParseMemory(*memory)
 	if err != nil {
 		fatal(err)
 	}
-	env, err := parseEnv(envFlags)
+	env, err := config.ParseEnv(envFlags)
 	if err != nil {
 		fatal(err)
 	}
-	volumes, err := parseVolumes(volumeFlags)
+	volumes, err := config.ParseVolumes(volumeFlags)
 	if err != nil {
 		fatal(err)
 	}
@@ -83,7 +83,7 @@ func initContainer(rootfs string) {
 	}
 
 	// El hijo necesita los volúmenes para hacer los bind mounts en setup.
-	volumes, err := parseVolumes(volumeFlags)
+	volumes, err := config.ParseVolumes(volumeFlags)
 	if err != nil {
 		fatal(err)
 	}
@@ -142,66 +142,4 @@ func runContainer(rootfs string, memBytes, cpuQuota int64, env []string, volumes
 	if err := container.New(cfg).Run(); err != nil {
 		fatal(err)
 	}
-}
-
-// parseEnv valida que cada --env tenga forma KEY=VALUE.
-func parseEnv(items []string) ([]string, error) {
-	out := make([]string, 0, len(items))
-	for _, e := range items {
-		k, _, ok := strings.Cut(e, "=")
-		if !ok || k == "" {
-			return nil, fmt.Errorf("--env inválido %q (esperado KEY=VALUE)", e)
-		}
-		out = append(out, e)
-	}
-	return out, nil
-}
-
-// parseVolumes convierte cada "/host:/contenedor" en config.Volume, con la
-// ruta de host normalizada a absoluta. El destino debe ser absoluto.
-func parseVolumes(items []string) ([]config.Volume, error) {
-	out := make([]config.Volume, 0, len(items))
-	for _, v := range items {
-		src, dst, ok := strings.Cut(v, ":")
-		if !ok || src == "" || dst == "" {
-			return nil, fmt.Errorf("--volume inválido %q (esperado /host:/contenedor)", v)
-		}
-		absSrc, err := filepath.Abs(src)
-		if err != nil {
-			return nil, fmt.Errorf("--volume %q: %w", v, err)
-		}
-		if !strings.HasPrefix(dst, "/") {
-			return nil, fmt.Errorf("--volume %q: el destino debe ser una ruta absoluta", v)
-		}
-		out = append(out, config.Volume{Source: absSrc, Target: dst})
-	}
-	return out, nil
-}
-
-// parseMemory convierte "100m", "512k", "1g" o un número de bytes a int64.
-// Cadena vacía => 0 (sin límite). Sufijos binarios (1k = 1024).
-func parseMemory(s string) (int64, error) {
-	s = strings.TrimSpace(s)
-	if s == "" || s == "0" {
-		return 0, nil
-	}
-
-	mult := int64(1)
-	switch s[len(s)-1] {
-	case 'k', 'K':
-		mult, s = 1024, s[:len(s)-1]
-	case 'm', 'M':
-		mult, s = 1024*1024, s[:len(s)-1]
-	case 'g', 'G':
-		mult, s = 1024*1024*1024, s[:len(s)-1]
-	}
-
-	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("valor de memoria inválido: %q", s)
-	}
-	if n < 0 {
-		return 0, fmt.Errorf("valor de memoria negativo: %q", s)
-	}
-	return n * mult, nil
 }
