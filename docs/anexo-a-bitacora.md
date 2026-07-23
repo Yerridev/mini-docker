@@ -211,3 +211,69 @@ acepta núcleos decimales (`0.5` = 50% de un core).
 
 **Justificación:** Sufijos son convención Docker. Parsing extraído a
 `config.ParseMemory` para testeabilidad (18 casos cubren edge cases).
+
+---
+
+## Hito 4 — CLI (--env, --volume, señales)
+
+### Decisión 4.1 — `--env` y `--volume` como flags repetibles
+
+**Contexto:** Docker permite múltiples variables y volúmenes.
+
+**Alternativas consideradas:**
+- Valores separados por coma.
+- Flags repetibles.
+
+**Decisión tomada:** Flags repetibles con tipo `stringSlice` (implementa
+`flag.Value`).
+
+**Justificación:** Convención Docker, más legible. `stringSlice` acumula
+valores automáticamente. Ambos padre e hijo parsean los mismos flags.
+
+### Decisión 4.2 — `mergeEnv` prioriza `--env` sobre heredadas
+
+**Contexto:** `--env PATH=/custom/bin` debe sobreescribir la PATH heredada
+sin duplicados.
+
+**Alternativas consideradas:**
+- Concatenar `--env` al final (puede duplicar).
+- Filtrar claves duplicadas, `--env` al final.
+
+**Decisión tomada:** Filtrar claves de `base` en `extra`, concatenar
+`extra` al final.
+
+**Justificación:** Prioridad explícita sin duplicados. Test
+`TestMergeEnvOverrideByExtra` verifica override correcto.
+
+### Decisión 4.3 — Bind mounts ANTES del `pivot_root`
+
+**Contexto:** Volúmenes son bind mounts con origen del host. Después de
+`pivot_root`, el origen desaparece.
+
+**Alternativas consideradas:**
+- Después de `pivot_root` (falla: origen no existe).
+- Antes de `pivot_root`.
+
+**Decisión tomada:** `mountVolumes` antes de `pivotRootfs` en
+`setupContainer`.
+
+**Justificación:** Única opción correcta: origen solo existe antes del
+cambio de raíz. Destino se resuelve dentro del rootfs. Mismo orden que
+Docker.
+
+### Decisión 4.4 — `forwardSignals` con `killGrace` de 3 segundos
+
+**Contexto:** PID 1 no recibe SIGTERM por defecto. Sin reenvío, el
+contenedor no muere con Ctrl+C.
+
+**Alternativas consideradas:**
+- SIGKILL directo (sin chance de limpieza).
+- Reenviar y esperar indefinidamente (puede colgar).
+- Reenviar y forzar SIGKILL tras timeout.
+
+**Decisión tomada:** Reenviar SIGINT/SIGTERM, esperar `killGrace` (3s),
+forzar SIGKILL si no terminó.
+
+**Justificación:** 3s es compromiso: suficiente para cleanup handler,
+sin lentitud perceptible. `signal.Notify` + goroutine con `select` maneja
+señal y timeout sin bloquear.
