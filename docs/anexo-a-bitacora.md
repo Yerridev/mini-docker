@@ -277,3 +277,82 @@ forzar SIGKILL si no terminó.
 **Justificación:** 3s es compromiso: suficiente para cleanup handler,
 sin lentitud perceptible. `signal.Notify` + goroutine con `select` maneja
 señal y timeout sin bloquear.
+
+---
+
+## Decisiones transversales
+
+### Decisión T.1 — `.gitattributes` fuerza `eol=lf` en Go/shell
+
+**Contexto:** Desarrollo en Windows, ejecución en Linux/WSL. `autocrlf=true`
+deja CRLF; `gofmt` falla y busybox sh rechaza `\r`.
+
+**Alternativas consideradas:**
+- Desactivar `autocrlf` en config local.
+- `.gitattributes` solo en `*.go`.
+- `.gitattributes` en Go, mod, sum y sh.
+
+**Decisión tomada:** `.gitattributes` con `eol=lf` en `*.go`, `*.mod`,
+`*.sum` y `*.sh`.
+
+**Justificación:** Funciona sin config local. Viaja con el repo. Cumple
+Sección 3.1 (`gofmt` sin warnings en cualquier plataforma).
+
+### Decisión T.2 — `.gitignore` excluye material del docente y rootfs
+
+**Contexto:** Material del docente (`guia minidocker.md`) con controles
+anti-autoría (Sección 2.3). Rootfs descargado no debe commitearse.
+
+**Alternativas consideradas:**
+- No ignorar nada.
+- Solo `rootfs/`.
+- `guia minidocker.md` y `rootfs/*`.
+
+**Decisión tomada:** `.gitignore` excluye ambos (con `.gitkeep` en rootfs).
+
+**Justificación:** Rúbrica requiere repo sin material del docente. Rootfs
+es artefacto descargable (~3MB), no código fuente.
+
+### Decisión T.3 — Tests extraídos a funciones exportadas
+
+**Contexto:** `parseMemory`, `parseEnv`, `parseVolumes` vivían en `main.go`
+(no exportadas, no testables).
+
+**Alternativas consideradas:**
+- Dejar en `main.go` (sin tests).
+- Mover a paquete interno testable.
+
+**Decisión tomada:** Mover a `internal/config` y `internal/cgroup`.
+
+**Justificación:** Suite completa: 18 casos `ParseMemory`, tests
+`ParseEnv`/`ParseVolumes`, 6+ casos `FormatCPUMax`. Coverage 97% config,
+50% cgroup. Tests corren en cualquier SO.
+
+### Decisión T.4 — `signals_linux_test.go` con helper-process
+
+**Contexto:** Tests de señales necesitan proceso hijo. `/bin/sleep` no
+existe en macOS/Windows.
+
+**Alternativas consideradas:**
+- `exec.Command("sleep", "10")` (no portable).
+- Helper-process estándar Go.
+
+**Decisión tomada:** Helper-process con `//go:build linux` y `TestMain`.
+
+**Justificación:** Patrón estándar Go. Binario se re-ejecuta a sí mismo.
+Sin dependencia de binarios externos. `//go:build linux` evita compile en
+otros SOs.
+
+### Decisión T.5 — Commits como work-units completos
+
+**Contexto:** Commits agrupan tests + código, no separados por tipo.
+
+**Alternativas consideradas:**
+- Separados: código + tests (fragmentación).
+- Por hito completo.
+
+**Decisión tomada:** Tests + código que se prueban juntos en el mismo
+commit.
+
+**Justificación:** Facilita `git bisect`/`git revert`. Cada commit es
+atómico. Cumple conventional commits (`feat:`, `fix:`, `test:`, `chore:`).
