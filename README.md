@@ -11,7 +11,7 @@ Proyecto académico — Taller de Programación en Go, nivel medio-avanzado.
 | **Hito 2** | ✅ Verificado en Linux (Ubuntu 24.04 WSL2) | Rootfs propio con pivot_root (fallback chroot) |
 | **Hito 3** | ✅ Verificado en Linux (Ubuntu 24.04 WSL2) | cgroups v2 (memoria y CPU) |
 | **Hito 4** | ✅ Verificado en Linux (Ubuntu 24.04 WSL2) | CLI: env vars, volúmenes, señales, integración |
-| **Hito 5** | ❌ No iniciado | Aislamiento de red (veth pair) |
+| **Hito 5** | ✅ Loopback implementado en Linux (veth bonus pendiente) | Aislamiento de red (`CLONE_NEWNET` + `lo` UP) |
 
 ## Requisitos
 
@@ -106,8 +106,8 @@ mini-docker/
 │   ├── namespace/
 │   │   ├── namespace_linux.go  ← SysProcAttr con CLONE_NEWUTS|NEWPID|NEWMNT
 │   │   └── namespace_other.go  ← stub para compilar en Windows/macOS
-│   ├── cgroup/              ← 🔲 Hito 3 — control de recursos
-│   └── network/             ← 🔲 Hito 5 — aislamiento de red
+│   ├── cgroup/              ← ✅ Hito 3 — control de recursos
+│   └── netns/               ← ✅ Hito 5 — aislamiento de red (loopback)
 ├── rootfs/                  ← Extraer Alpine aquí para Hito 2 (gitignoreado)
 ├── scripts/
 │   └── setup-rootfs.sh      ← ✅ Hito 2 — descarga/extrae Alpine minirootfs
@@ -126,20 +126,21 @@ minidocker run /bin/sh
   │   └─ SysProcAttr con CLONE_NEWUTS | CLONE_NEWPID | CLONE_NEWMNT
   │   └─ env MINIDOCKER_INIT=1
   │
-  ├─ fork → kernel crea namespaces UTS, PID, MNT para el hijo
+  ├─ fork → kernel crea namespaces UTS, PID, MNT, NET para el hijo
   │
   ├─ [HIJO] main.go: detecta MINIDOCKER_INIT=1, entra a initContainer()
   │
   ├─ exec.go → setupContainer():
-  │   ├─ sethostname("minidocker")             ← UTS
+  │   ├─ sethostname(cfg.Hostname)             ← UTS
   │   ├─ mount / privado (MS_REC|MS_PRIVATE)   ← sin fugas de montajes al host
   │   ├─ pivot_root(rootfs) — fallback chroot  ← HITO 2: raíz propia
   │   └─ mount("proc", "/proc", "proc")        ← MNT + PID, DESPUÉS del pivot
+│   │   └─ netns.Setup(cfg)                      ← NET: levanta lo
   │
   ├─ execContainer(): syscall.Exec("/bin/sh")
   │   └─ reemplaza el proceso Go por /bin/sh — es PID 1
   │
-  └─ /bin/sh corriendo con aislamiento de namespaces
+  └─ /bin/sh corriendo con aislamiento de namespaces (UTS, PID, MNT, NET)
 ```
 
 ## Hitos pendientes — asignación por integrante

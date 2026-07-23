@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"minidocker/internal/netns"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -14,9 +15,10 @@ type Volume struct {
 }
 
 type Config struct {
-	Rootfs  string
-	Command string
-	Args    []string
+	Rootfs   string
+	Command  string
+	Args     []string
+	Hostname string
 
 	// Hito 3 — límites de recursos (cgroups v2). Valor 0 = sin límite.
 	MemoryBytes int64 // memory.max, en bytes
@@ -26,6 +28,9 @@ type Config struct {
 	// Hito 4 — entorno y volúmenes.
 	Env     []string // variables "KEY=VALUE" para el proceso del contenedor
 	Volumes []Volume // bind mounts host -> contenedor
+
+	// Hito 5 — red aislada.
+	NetMode netns.Mode // loopback (default), none, veth
 }
 
 // ParseEnv valida que cada --env tenga forma KEY=VALUE y lo devuelve tal cual.

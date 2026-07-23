@@ -33,7 +33,7 @@ func (c *Container) Run() error {
 	// Reenviar --rootfs y --volume al proceso init (el hijo los necesita para
 	// el chroot y los bind mounts). Los límites de cgroup y las variables de
 	// entorno los aplica el padre, no se reenvían como flags.
-	initArgs := []string{"--rootfs", c.Config.Rootfs}
+	initArgs := []string{"--rootfs", c.Config.Rootfs, "--hostname", c.Config.Hostname, "--net", c.Config.NetMode.String()}
 	for _, v := range c.Config.Volumes {
 		initArgs = append(initArgs, "--volume", v.Source+":"+v.Target)
 	}

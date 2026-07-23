@@ -72,11 +72,12 @@ Resultado esperado en Linux:
 ok      minidocker/internal/cgroup      1.0xx s
 ok      minidocker/internal/config      1.0xx s
 ok      minidocker/internal/container   1.0xx s
+ok      minidocker/internal/netns       0.0xx s
 ?       minidocker/internal/namespace   [no test files]
-```
 
-Nota: `signals_linux_test.go` tiene `//go:build linux` — solo corre en Linux;
-es el que valida la concurrencia de `forwardSignals` con `-race`.
+Nota: `signals_linux_test.go` y `netns_linux_test.go` tienen `//go:build linux`
+— solo corren en Linux. El primero valida la concurrencia de `forwardSignals`
+con `-race`; el segundo valida que `lo` se levanta en un namespace NET nuevo.
 
 ---
 
@@ -93,7 +94,7 @@ qué ve el proceso.
 | UTS | hostname | `CLONE_NEWUTS` |
 | PID | numeración de procesos (el init es PID 1) | `CLONE_NEWPID` |
 | MNT | árbol de montajes | `CLONE_NEWMNT` |
-| NET *(Hito 5, opcional)* | interfaces de red, rutas | `CLONE_NEWNET` |
+| NET | interfaces de red, rutas | `CLONE_NEWNET` |
 
 En el código: `internal/namespace/namespace_linux.go` setea `SysProcAttr.Cloneflags`.
 
@@ -355,6 +356,54 @@ reenvió al init del contenedor. Como el init no manejaba SIGTERM/SIGINT, tras
 > por SIGINT). Técnicamente correcto (el hijo terminó por señal), aunque en
 > producción Docker no lo trataría como error.
 
+### Hito 5 — Red aislada (loopback)
+
+```bash
+sudo ./minidocker --rootfs rootfs run /bin/sh
+```
+
+Adentro:
+```sh
+ip addr 2>/dev/null || cat /proc/net/dev
+```
+```
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 ...
+```
+**Por qué:** `CLONE_NEWNET` crea un namespace NET propio y `netns.Setup`
+levanta `lo` con `SIOCSIFFLAGS`.
+
+```sh
+ping -c 1 127.0.0.1
+```
+```
+PING 127.0.0.1 (127.0.0.1): 56 data bytes
+64 bytes from 127.0.0.1: icmp_seq=0 ttl=64 time=0.050 ms
+```
+**Por qué:** `lo` está UP y enrutado dentro del namespace.
+
+```sh
+ping -c 1 <IP_del_host>
+```
+```
+ping: sendto: Network is unreachable
+```
+**Por qué:** el contenedor no comparte interfaces ni rutas con el host.
+
+```bash
+sudo ./minidocker --rootfs rootfs --net none run /bin/sh
+```
+Adentro:
+```sh
+cat /proc/net/dev
+```
+```
+Inter-|   Receive ...
+ face |bytes    packets ...
+    lo:       0       0 ...
+```
+**Por qué:** `lo` existe (el kernel siempre la crea) pero no está UP; con
+`--net none` no se levanta.
+
 ---
 
 ## 6. Troubleshooting
@@ -390,9 +439,10 @@ go test -cover ./internal/config ./internal/cgroup ./internal/container
 
 | Paquete | Cobertura | Notas |
 |---|---|---|
-| `internal/config` | **97%** | `ParseMemory`/`ParseEnv`/`ParseVolumes` son funciones puras, fácil de cubrir. |
+| `internal/config` | **97%** | `ParseMemory`/`ParseEnv`/`ParseVolumes`/`ParseMode` son funciones puras, fácil de cubrir. |
 | `internal/cgroup` | 50% | Unit tests de `FormatCPUMax`/`Contains`/guard `SetMemoryLimit(0)`. El resto toca `/sys` (requiere Linux + root, fuera de reach de unit tests sin privileges). |
 | `internal/container` | 17.6% en Windows / **sube en Linux** | Los tests de `forwardSignals` están en `signals_linux_test.go` con `//go:build linux`. En Linux corren y la cobertura sube. |
+| `internal/netns` | ~80% en Linux | `ParseMode`/`String` son portables. `setLinkUp` se testea en un namespace NET nuevo con helper-process.
 
 **¿Por qué `-race` solo aporta en Linux para este proyecto?** La única
 concurrencia real está en `forwardSignals` (goroutine + channels + signal).
@@ -434,6 +484,12 @@ Linux.
 > del namespace es PID 1 y no recibe SIGTERM por default; por eso tengo
 > `forwardSignals` que reenvía SIGINT/SIGTERM al hijo y, si no muere en 3s,
 > fuerza SIGKILL — mismo modelo que `docker stop`."
+
+**Hito 5 — Red aislada**
+> "Añadí `CLONE_NEWNET` al hijo para que tenga su propia pila de red. Dentro
+> del namespace NET el kernel crea un `lo` propio pero está DOWN; lo levanto
+> con `SIOCSIFFLAGS` antes de ejecutar el comando del usuario. Con `--net
+> none` no se levanta, así que el contenedor queda sin loopback activo."
 
 ### Preguntas anticipadas
 
@@ -496,6 +552,9 @@ Mide comprensión del flujo padre→hijo→setup. Tiempo objetivo: 5-7 min.
 | **`cgroup.kill`** | Archivo que mata todo el subárbol del cgroup con una escritura (`1`). |
 | **OOM kill** | Out-Of-Memory kill: el kernel mata el proceso que supera `memory.max`. |
 | **PID 1** | Primer proceso de un PID namespace. No recibe señales por default (no tiene handler del kernel). |
+| **`CLONE_NEWNET`** | Flag de `clone(2)` que crea un namespace de red propio para el hijo. |
+| **`SIOCSIFFLAGS`** | ioctl para cambiar los flags de una interfaz de red (usado para poner `lo` UP). |
+| **`veth`** | Par de interfaces virtuales que actúan como un cable entre dos namespaces de red. |
 | **`forwardSignals`** | Función del runtime que reenvía SIGINT/SIGTERM al PID 1 del contenedor y fuerza SIGKILL tras gracia. |
 | **`killGrace`** | Período de gracia (3 s) antes de SIGKILL. Mismo modelo que `docker stop`. |
 | **`EBUSY`** | errno que devuelve `rmdir` si el cgroup aún tiene procesos. Motivo del reintento en `Cleanup`. |
