@@ -129,3 +129,85 @@ absoluta en el padre.
 
 **Justificación:** La normalización es crítica: el hijo cambia de cwd
 durante `pivot_root`, y un path relativo dejaría de funcionar.
+
+---
+
+## Hito 3 — Cgroups v2 (memoria y CPU)
+
+### Decisión 3.1 — Paquete `internal/cgroup/` con split por SO
+
+**Contexto:** Cgroups son específicos de Linux. El código debe compilarse
+solo en Linux con stubs en otras plataformas.
+
+**Alternativas consideradas:**
+- Todo en un solo archivo con `//go:build linux`.
+- Split en `cgroup.go` (común) + `cgroup_linux.go` + `cgroup_other.go`.
+
+**Decisión tomada:** Split en tres archivos.
+
+**Justificación:** Funciones como `FormatCPUMax` y `Contains` no dependen
+de Linux; testearlas en Windows/CI es valioso. Cumple Sección 3.1 (`go
+test -race` verde en todas las plataformas).
+
+### Decisión 3.2 — Delegar controladores en `cgroup.subtree_control`
+
+**Contexto:** En cgroups v2, un controlador solo puede usarse si está
+habilitado en `cgroup.subtree_control` del padre.
+
+**Alternativas consideradas:**
+- Asumir controladores habilitados (rompe en systemd).
+- Habilitar solo en el padre.
+- Delegación recursiva: raíz → nivel intermedio → hijo.
+
+**Decisión tomada:** Delegación recursiva: `delegateControllers` en raíz
+y nivel intermedio `minidocker/`.
+
+**Justificación:** Systemd puede no tener `memory`/`cpu` habilitados. La
+delegación en dos niveles garantiza que el cgroup hijo funcione sin
+importar la configuración del host.
+
+### Decisión 3.3 — `cgroup.kill "1"` con fallback SIGKILL manual
+
+**Contexto:** Al eliminar un cgroup, los procesos deben morir primero.
+Kernels 5.14+ tienen `cgroup.kill`; antiguos requieren SIGKILL manual.
+
+**Alternativas consideradas:**
+- Solo SIGKILL manual (lento, funciona siempre).
+- Solo `cgroup.kill` (rápido, kernels < 5.14 no).
+- `cgroup.kill` con fallback SIGKILL.
+
+**Decisión tomada:** `cgroup.kill` primario con fallback SIGKILL.
+
+**Justificación:** `cgroup.kill` es atómico y rápido. El fallback cubre
+kernels antiguos. `removeWithRetry` reintenta `rmdir` ante `EBUSY` (el
+kernel tarda ms en vaciar el cgroup).
+
+### Decisión 3.4 — Fix de portabilidad: `MS_PRIVATE` antes de `/proc`
+
+**Contexto:** Corrección del Hito 2 que impactó Hito 3. Sin `MS_PRIVATE`,
+el mount de `/proc` se propaga al host en systemd.
+
+**Alternativas consideradas:**
+- Documentar "solo funciona sin systemd".
+- Aplicar `MS_PRIVATE` siempre.
+
+**Decisión tomada:** `MS_PRIVATE` siempre, antes de montar `/proc`.
+
+**Justificación:** Fix crítico de portabilidad. El síntoma ("primera
+corrida funciona, siguientes fallan") es difícil de diagnosticar. `MS_PRIVATE`
+universal previene el problema sin efectos colaterales.
+
+### Decisión 3.5 — Flags `--memory` y `--cpu` con parsing flexible
+
+**Contexto:** Límites de recursos con sintaxis amigable y compatible con
+Docker.
+
+**Alternativas consideradas:**
+- Solo bytes y cores decimales (mínimo).
+- Sufijos (`k`, `m`, `g`) + cores decimales.
+
+**Decisión tomada:** `--memory` acepta sufijos y bytes crudos; `--cpu`
+acepta núcleos decimales (`0.5` = 50% de un core).
+
+**Justificación:** Sufijos son convención Docker. Parsing extraído a
+`config.ParseMemory` para testeabilidad (18 casos cubren edge cases).
