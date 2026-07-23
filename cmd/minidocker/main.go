@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"minidocker/internal/config"
 	"minidocker/internal/container"
+	"minidocker/internal/netns"
 	"os"
 	"path/filepath"
 )
@@ -23,11 +24,13 @@ func (s *stringSlice) String() string {
 }
 func (s *stringSlice) Set(v string) error { *s = append(*s, v); return nil }
 
-// Flags repetibles: son globales porque tanto el padre como el proceso init
-// (hijo) los parsean con el mismo flag.FlagSet.
+// Flags repetibles y simples que tanto el padre como el proceso init (hijo)
+// parsean con el mismo flag.FlagSet.
 var (
 	envFlags    stringSlice
 	volumeFlags stringSlice
+	netMode     string
+	hostname    string
 )
 
 func main() {
@@ -36,6 +39,8 @@ func main() {
 	cpu := flag.Float64("cpu", 0, "cpu limit in cores, e.g. 0.5 (0 = unlimited)")
 	flag.Var(&envFlags, "env", "environment variable KEY=VALUE (repeatable)")
 	flag.Var(&volumeFlags, "volume", "bind mount /host:/container (repeatable)")
+	flag.StringVar(&netMode, "net", "loopback", "network mode: loopback (default), none, veth")
+	flag.StringVar(&hostname, "hostname", "minidocker", "hostname inside the container")
 	flag.Parse()
 
 	if isInit() {
@@ -61,7 +66,12 @@ func main() {
 		cpuQuota = int64(*cpu * float64(cpuPeriod))
 	}
 
-	runContainer(*rootfs, memBytes, cpuQuota, env, volumes)
+	mode, err := netns.ParseMode(netMode)
+	if err != nil {
+		fatal(err)
+	}
+
+	runContainer(*rootfs, hostname, memBytes, cpuQuota, env, volumes, mode)
 }
 
 func isInit() bool {
@@ -87,12 +97,18 @@ func initContainer(rootfs string) {
 	if err != nil {
 		fatal(err)
 	}
+	mode, err := netns.ParseMode(netMode)
+	if err != nil {
+		fatal(err)
+	}
 
 	cfg := &config.Config{
-		Rootfs:  rootfs,
-		Command: args[1],
-		Args:    args[2:],
-		Volumes: volumes,
+		Rootfs:   rootfs,
+		Command:  args[1],
+		Args:     args[2:],
+		Hostname: hostname,
+		Volumes:  volumes,
+		NetMode:  mode,
 	}
 
 	if err := container.ExecInit(cfg); err != nil {
@@ -100,10 +116,10 @@ func initContainer(rootfs string) {
 	}
 }
 
-func runContainer(rootfs string, memBytes, cpuQuota int64, env []string, volumes []config.Volume) {
+func runContainer(rootfs, hostname string, memBytes, cpuQuota int64, env []string, volumes []config.Volume, mode netns.Mode) {
 	args := flag.Args()
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: minidocker [--rootfs <path>] [--memory <n>] [--cpu <n>] [--env K=V] [--volume /h:/c] run <command> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: minidocker [--rootfs <path>] [--memory <n>] [--cpu <n>] [--env K=V] [--volume /h:/c] [--net loopback|none|veth] [--hostname <name>] run <command> [args...]")
 		os.Exit(1)
 	}
 
@@ -132,11 +148,13 @@ func runContainer(rootfs string, memBytes, cpuQuota int64, env []string, volumes
 		Rootfs:      absRootfs,
 		Command:     args[1],
 		Args:        args[2:],
+		Hostname:    hostname,
 		MemoryBytes: memBytes,
 		CPUQuota:    cpuQuota,
 		CPUPeriod:   cpuPeriod,
 		Env:         env,
 		Volumes:     volumes,
+		NetMode:     mode,
 	}
 
 	if err := container.New(cfg).Run(); err != nil {

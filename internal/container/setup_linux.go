@@ -3,12 +3,16 @@ package container
 import (
 	"fmt"
 	"minidocker/internal/config"
+	"minidocker/internal/netns"
 	"os"
 	"path/filepath"
 	"syscall"
 )
 
 func sethostname(name string) error {
+	if name == "" {
+		name = "minidocker"
+	}
 	if err := syscall.Sethostname([]byte(name)); err != nil {
 		return fmt.Errorf("sethostname: %w", err)
 	}
@@ -120,7 +124,7 @@ func mountVolumes(cfg *config.Config) error {
 
 func setupContainer(cfg *config.Config) error {
 	// FASE 1 — UTS: cambiar hostname dentro del namespace
-	if err := sethostname("minidocker"); err != nil {
+	if err := sethostname(cfg.Hostname); err != nil {
 		return err
 	}
 
@@ -154,6 +158,11 @@ func setupContainer(cfg *config.Config) error {
 	// FASE 3 — MNT + PID: montar /proc propio, ya dentro del nuevo root.
 	// Dentro del nuevo MNT namespace, este mount NO afecta al host.
 	if err := mountProc(); err != nil {
+		return err
+	}
+
+	// FASE 4 — NET: configurar red dentro del namespace NET recién creado.
+	if err := netns.Setup(cfg.NetMode); err != nil {
 		return err
 	}
 

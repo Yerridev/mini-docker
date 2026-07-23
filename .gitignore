@@ -1,7 +1,8 @@
-minidocker
-minidocker.exe
-minidocker.linux
+/minidocker
+/minidocker.exe
+/minidocker.linux
 *.exe
+*.test
 
 # rootfs extraído de Alpine (Hito 2) — nunca commitear
 rootfs/*
