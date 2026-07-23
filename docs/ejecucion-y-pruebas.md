@@ -226,22 +226,30 @@ sudo ./minidocker --rootfs rootfs --memory 64m run /bin/sh
 
 Adentro:
 ```sh
-yes | head -c 30000000 >/dev/null
+awk 'BEGIN{x="x"; while(1){x=x x; if(length(x)>200000000) exit}}'
 ```
 ```
-Memory cgroup out of memory: Killed process (tail ...)
+Memory cgroup out of memory: Killed process (awk ...)
 ```
-**Por qué:** `memory.max` quedó en 67108864 bytes (64 MiB). El `yes` llena
-memoria; al pasar el límite, el kernel OOM-kill mata el proceso.
+**Por qué:** `awk` duplica el string en cada iteración y lo **mantiene en
+memoria** (no es streaming por pipe como `yes | head`, que solo usa ~64 KB
+de buffer). Cuando pasa los 64 MiB de `memory.max`, el kernel OOM-kill lo
+mata. Forzar OOM requiere acumular RAM, no llenar un pipe.
 
-En otra terminal (mientras el contenedor corre):
+> **Importante:** el check de `memory.max` debe hacerse **desde el HOST**,
+> no desde adentro del contenedor. Tras `pivot_root`, el contenedor no ve
+> `/sys/fs/cgroup` del host (queda fuera de su rootfs).
+
+En otra terminal **del HOST** (mientras el contenedor corre):
 ```bash
 cat /sys/fs/cgroup/minidocker/c-*/memory.max
 ```
 ```
 67108864
 ```
-**Por qué:** confirás que el cgroup se creó con el límite pedido.
+**Por qué:** confirás que el cgroup se creó con el límite pedido (64 MiB =
+67108864 bytes). Solo visible desde el host: el rootfs del contenedor ya no
+incluye `/sys/fs/cgroup`.
 
 #### CPU
 
@@ -251,8 +259,12 @@ sudo ./minidocker --rootfs rootfs --cpu 0.2 run /bin/sh
 
 Adentro:
 ```sh
-time (i=0; while [ $i -lt 60000000 ]; do i=$((i+1)); done)
+time sh -c 'i=0; while [ $i -lt 60000000 ]; do i=$((i+1)); done'
 ```
+> **Por qué `sh -c`**: busybox `ash` (el `sh` de Alpine) **no acepta
+> subshell `( ... )` detrás del builtin `time`** — da "syntax error:
+> unexpected word (expecting `)`)". Envolver el bucle en `sh -c '...'` es
+> la forma portátil.
 ```
 real    ~18s
 ```
@@ -355,6 +367,10 @@ reenvió al init del contenedor. Como el init no manejaba SIGTERM/SIGINT, tras
 | `cgroup: ... no such file or directory` | cgroup colgado de una corrida interrumpida | `sudo rm -rf /sys/fs/cgroup/minidocker/c-*` |
 | `fork/exec ... no such file` en la 2da corrida | `/proc` del host se corrompió por falta de `make-rprivate` (ya arreglado en main) | verificá que `setup_linux.go` tenga `makeMountsPrivate` |
 | binarios Alpine con `: not found` | rootfs descomprimido en NTFS/shared folder (symlinks rotos) | reposicionar a `~/mini-docker` en filesystem ext4 nativo |
+| `syntax error: unexpected word (expecting ")` con `time` | busybox `ash` no acepta subshell `( ... )` detrás de `time` | usar `time sh -c '...'` en vez de `time ( ... )` |
+| `echo $F00` imprime vacío | typo: `$F00` (F-ceros) vs `$FOO` (F-O-O mayúscula) | escribir las variables **exactamente** como aparecen en `--env` |
+| OOM no se dispara con `yes \| head -c 30M` | pipe streaming solo usa ~64 KB de buffer, no acumula RAM | usar `awk 'BEGIN{x="x"; while(1){x=x x; if(length(x)>200000000) exit}}'` |
+| `cat /sys/fs/cgroup/...` falla **adentro** del contenedor | tras `pivot_root`, `/sys/fs/cgroup` del host no es visible | verificar `memory.max` desde **el HOST** en otra terminal |
 
 Limpieza manual si quedó algo:
 ```bash
