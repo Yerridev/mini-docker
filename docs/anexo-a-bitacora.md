@@ -47,3 +47,85 @@ había que decidir cuáles incluir.
 **Justificación:** UTS permite hostname independiente. PID aísla el árbol
 de procesos (el hijo es PID 1). MNT es requisito para `pivot_root`. NET y
 USER agregan complejidad significativa sin impacto pedagógico proporcional.
+
+---
+
+## Hito 2 — Rootfs propio (pivot_root / chroot)
+
+### Decisión 2.1 — `pivot_root` primario con fallback a `chroot`
+
+**Contexto:** El contenedor necesita su propio filesystem raíz. Las opciones
+son `chroot(2)` (simple pero con fugas) y `pivot_root(2)` (sin vías de escape).
+
+**Alternativas consideradas:**
+- Solo `chroot` (trivial, pero root del host queda accesible).
+- Solo `pivot_root` (seguro, pero puede fallar en NFS/rootfs inválidos).
+- `pivot_root` con fallback a `chroot`.
+
+**Decisión tomada:** `pivot_root` primario con fallback a `chroot`.
+
+**Justificación:** `pivot_root` desmonta el root viejo (`/.oldroot` se
+unmount y elimina), sin vías de escape. El fallback cubre filesystems que
+no soportan `pivot_root`, manteniendo funcionalidad sin romper Hito 1.
+
+### Decisión 2.2 — `mount --make-rprivate /` antes de `pivot_root`
+
+**Contexto:** En hosts con systemd, `/` tiene propagación `MS_SHARED`. Sin
+cambiar a `MS_PRIVATE`, los montajes del contenedor se propagan al host.
+
+**Alternativas consideradas:**
+- No hacer nada (asumir host con propagación privada).
+- `MS_PRIVATE` solo en el rootfs.
+- `MS_REC|MS_PRIVATE` en `/` (recursivo, todo el árbol).
+
+**Decisión tomada:** `MS_REC|MS_PRIVATE` en `/` antes de cualquier mount.
+
+**Justificación:** `MS_REC` es crucial: sin recursivo, sub-mounts de
+systemd mantienen `shared`. Esto causa el bug "primera corrida funciona,
+las siguientes fallan" porque `/proc` del host se corrompe.
+
+### Decisión 2.3 — `/proc` se monta DESPUÉS del cambio de raíz
+
+**Contexto:** `/proc` debe reflejar el PID namespace del contenedor, no el
+del host. Si se monta antes de `pivot_root`, muestra procesos del host.
+
+**Alternativas consideradas:**
+- Montar antes de `pivot_root` (incorrecto).
+- Montar después del cambio de raíz.
+
+**Decisión tomada:** Montar `/proc` después de `pivot_root`.
+
+**Justificación:** Después del cambio, el proceso vive en su nuevo rootfs.
+`/proc` refleja solo procesos del contenedor; `ps aux` muestra `/bin/sh`
+como PID 1, no el PID real del host.
+
+### Decisión 2.4 — Script `setup-rootfs.sh` con Alpine minirootfs
+
+**Contexto:** Testing y demostración requieren un rootfs mínimo con `sh`,
+`ls`, `ps`.
+
+**Alternativas consideradas:**
+- Rootfs manual (tedioso).
+- Distro completa (demasiado grande).
+- Alpine minirootfs (~3MB, busybox).
+
+**Decisión tomada:** Alpine minirootfs 3.21 via `setup-rootfs.sh`.
+
+**Justificación:** Alpine minirootfs es estándar para contenedores
+minimalistas. Busybox incluye herramientas necesarias. El script automatiza
+descarga y extracción.
+
+### Decisión 2.5 — Bugfix: reenviar `--rootfs` al proceso init
+
+**Contexto:** El hijo heredaba rootfs por defecto (`./rootfs`). Si el
+usuario especificaba otro path, el hijo no lo recibía.
+
+**Alternativas consideradas:**
+- Variable de entorno para pasar rootfs.
+- Reenviar `--rootfs` como argumento CLI.
+
+**Decisión tomada:** Reenviar `--rootfs` como flag, normalizado a ruta
+absoluta en el padre.
+
+**Justificación:** La normalización es crítica: el hijo cambia de cwd
+durante `pivot_root`, y un path relativo dejaría de funcionar.
